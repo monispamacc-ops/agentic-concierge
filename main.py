@@ -17,10 +17,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Groq LLM with structured output support
-llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-structured_llm = llm.with_structured_output(TravelIntent)
-
 # In-memory storage for session conversation history
 session_store = {}
 
@@ -78,6 +74,8 @@ def parse_user_intent(request: ChatRequest):
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
     
     try:
+        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+        structured_llm = llm.with_structured_output(TravelIntent)
         prompt = f"Extract the travel intent and parameters from the following user request: '{request.message}'"
         return structured_llm.invoke(prompt)
     except Exception as e:
@@ -89,30 +87,29 @@ def run_agent_workflow(request: ChatRequest):
         raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
     
     try:
-        # 1. Manage Session Memory
+        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+        structured_llm = llm.with_structured_output(TravelIntent)
+
         session_id = request.session_id or "default_session"
         if session_id not in session_store:
             session_store[session_id] = []
         
         session_store[session_id].append({"role": "user", "message": request.message})
         
-        # 2. Parse Intent using LLM with Safety Fallback
         prompt = f"Extract the travel intent and parameters from the following user request: '{request.message}'. If it is unrelated to travel, booking, flights, or hotels, set action_type to 'general_inquiry'."
         intent = structured_llm.invoke(prompt)
         
-        # 3. Safe Budget Extraction (Handles numbers, text like 'cheap', or missing values)
         raw_budget = intent.max_budget
         try:
             if raw_budget is not None and str(raw_budget).replace('.', '', 1).isdigit():
                 budget = float(raw_budget)
             else:
-                budget = 1000.0  # Default budget for text indicators like 'cheap'
+                budget = 1000.0
         except Exception:
             budget = 1000.0
 
         destination = intent.destination if intent.destination else "Unknown"
         
-        # 4. Dynamic Agentic Routing
         tool_name = "none"
         tool_output = {}
         
@@ -144,11 +141,15 @@ def run_agent_workflow(request: ChatRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent workflow execution error: {str(e)}")
+
 def run_agent_logic(message: str, session_id: str = "streamlit_user"):
     if not os.getenv("GROQ_API_KEY"):
         raise RuntimeError("GROQ_API_KEY is not configured.")
     
     try:
+        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+        structured_llm = llm.with_structured_output(TravelIntent)
+
         session_id = session_id or "default_session"
         if session_id not in session_store:
             session_store[session_id] = []
@@ -199,4 +200,4 @@ def run_agent_logic(message: str, session_id: str = "streamlit_user"):
             "tool_output": tool_output
         }
     except Exception as e:
-        raise RuntimeError(f"Agent workflow execution error: {str(e)}")   
+        raise RuntimeError(f"Agent workflow execution error: {str(e)}")
