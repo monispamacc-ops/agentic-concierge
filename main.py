@@ -17,10 +17,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory storage for session conversation history
 session_store = {}
 
-# Mock Tool 1: Dynamic Flight Search
 def search_flights_tool(destination: str, max_budget: float):
     return {
         "status": "success",
@@ -32,10 +30,8 @@ def search_flights_tool(destination: str, max_budget: float):
         "message": f"Successfully retrieved flights to {destination} within budget ${max_budget}."
     }
 
-# Mock Tool 2: Distinct Real-World Hotel Search per Destination
 def search_hotels_tool(destination: str, max_budget: float):
     dest_lower = destination.lower()
-    
     if "tokyo" in dest_lower:
         hotels = [
             {"name": "The Ritz-Carlton, Tokyo", "price": min(450, int(max_budget * 0.8)), "location": destination, "rating": "4.9/5"},
@@ -56,7 +52,6 @@ def search_hotels_tool(destination: str, max_budget: float):
             {"name": f"Metropolitan Luxury Suites {destination}", "price": min(280, int(max_budget * 0.5)), "location": destination, "rating": "4.7/5"},
             {"name": f"Central Oasis Inn {destination}", "price": min(170, int(max_budget * 0.3)), "location": destination, "rating": "4.4/5"}
         ]
-
     return {
         "status": "success",
         "service": "hotels",
@@ -67,80 +62,6 @@ def search_hotels_tool(destination: str, max_budget: float):
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "message": "Concierge backend is running."}
-
-@app.post("/parse-intent", response_model=TravelIntent)
-def parse_user_intent(request: ChatRequest):
-    if not os.getenv("GROQ_API_KEY"):
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
-    
-    try:
-        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-        structured_llm = llm.with_structured_output(TravelIntent)
-        prompt = f"Extract the travel intent and parameters from the following user request: '{request.message}'"
-        return structured_llm.invoke(prompt)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/run-agent", response_model=AgentResponse)
-def run_agent_workflow(request: ChatRequest):
-    if not os.getenv("GROQ_API_KEY"):
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY is not configured.")
-    
-    try:
-        llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-        structured_llm = llm.with_structured_output(TravelIntent)
-
-        session_id = request.session_id or "default_session"
-        if session_id not in session_store:
-            session_store[session_id] = []
-        
-        session_store[session_id].append({"role": "user", "message": request.message})
-        
-        prompt = f"Extract the travel intent and parameters from the following user request: '{request.message}'. If it is unrelated to travel, booking, flights, or hotels, set action_type to 'general_inquiry'."
-        intent = structured_llm.invoke(prompt)
-        
-        raw_budget = intent.max_budget
-        try:
-            if raw_budget is not None and str(raw_budget).replace('.', '', 1).isdigit():
-                budget = float(raw_budget)
-            else:
-                budget = 1000.0
-        except Exception:
-            budget = 1000.0
-
-        destination = intent.destination if intent.destination else "Unknown"
-        
-        tool_name = "none"
-        tool_output = {}
-        
-        if intent.action_type == "book_travel":
-            tool_name = "search_flights_tool"
-            tool_output = search_flights_tool(destination, budget)
-        elif intent.action_type == "book_hotel":
-            tool_name = "search_hotels_tool"
-            tool_output = search_hotels_tool(destination, budget)
-        else:
-            tool_name = "fallback_response"
-            tool_output = {
-                "status": "info",
-                "service": "general",
-                "message": "I am your corporate travel concierge assistant. I can help you search for flights or hotels. Please specify your travel destination and budget!"
-            }
-            
-        session_store[session_id].append({
-            "role": "assistant", 
-            "intent": intent.dict(), 
-            "tool_executed": tool_name, 
-            "tool_output": tool_output
-        })
-        
-        return AgentResponse(
-            intent=intent,
-            tool_executed=tool_name,
-            tool_output=tool_output
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent workflow execution error: {str(e)}")
 
 def run_agent_logic(message: str, session_id: str = "streamlit_user"):
     if not os.getenv("GROQ_API_KEY"):
@@ -159,9 +80,13 @@ def run_agent_logic(message: str, session_id: str = "streamlit_user"):
         prompt = f"Extract the travel intent and parameters from the following user request: '{message}'. If it is unrelated to travel, booking, flights, or hotels, set action_type to 'general_inquiry'."
         intent = structured_llm.invoke(prompt)
         
-        raw_budget = intent.max_budget
+        # Enhanced Budget Extraction handling regional terms like 'lakh'
+        raw_budget = str(intent.max_budget).lower() if intent.max_budget else "1000"
         try:
-            if raw_budget is not None and str(raw_budget).replace('.', '', 1).isdigit():
+            if "lakh" in raw_budget:
+                num_part = "".join(filter(lambda c: c.isdigit() or c == ".", raw_budget))
+                budget = float(num_part) * 100000.0 if num_part else 100000.0
+            elif raw_budget.replace(".", "", 1).isdigit():
                 budget = float(raw_budget)
             else:
                 budget = 1000.0
@@ -194,8 +119,12 @@ def run_agent_logic(message: str, session_id: str = "streamlit_user"):
             "tool_output": tool_output
         })
         
+        # Override max_budget in returned intent so UI displays the computed numeric budget cleanly
+        intent_dict = intent.dict()
+        intent_dict["max_budget"] = budget
+        
         return {
-            "intent": intent.dict(),
+            "intent": intent_dict,
             "tool_executed": tool_name,
             "tool_output": tool_output
         }
