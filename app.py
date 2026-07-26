@@ -1,56 +1,107 @@
-import streamlit as st
 import os
+import streamlit as st
 from main import run_agent_logic
 
-st.set_page_config(page_title="Enterprise Agentic Concierge", page_icon="✈️", layout="centered")
+# Page Configuration
+st.set_page_config(
+    page_title="Enterprise Agentic Concierge",
+    page_icon="✈️",
+    layout="centered"
+)
 
-st.title("✈️ Enterprise Agentic Concierge")
-st.write("Your AI-powered corporate travel assistant (Robust Error-Handling Enabled).")
+# Custom Styling for High-End Dark Interface
+st.markdown("""
+    <style>
+    .main {
+        background-color: #0e1117;
+        color: #ffffff;
+    }
+    .stTextInput textarea {
+        color: #ffffff !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# Securely load API key from Streamlit secrets if running on cloud
-if "GROQ_API_KEY" in st.secrets:
-    os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+st.markdown("# ✈️ Enterprise Agentic Concierge")
+st.markdown("Your AI-powered corporate travel assistant (Robust Error-Handling Enabled).")
 
+# Initialize Session State History
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Display Chat History
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        if "data" in message and message["data"]:
+            data = message["data"]
+            intent = data.get("intent", {})
+            tool_name = data.get("tool_executed", "")
+            tool_output = data.get("tool_output", {})
+            
+            with st.expander("🔍 View Agent Execution Details"):
+                st.markdown(f"**Intent Detected:** `{intent.get('action_type', 'unknown')}`")
+                st.markdown(f"- **Destination:** {intent.get('destination', 'N/A')}")
+                st.markdown(f"- **Max Budget:** {intent.get('max_budget', 'N/A')}")
+                
+                if tool_name and tool_name != "none":
+                    st.markdown(f"**Tool Executed:** `{tool_name}`")
+                    if "results" in tool_output:
+                        st.markdown("**Retrieved Options:**")
+                        for item in tool_output["results"]:
+                            st.markdown(f"- ✈️ {item.get('name', 'Option')} - {item.get('price', '')} to {item.get('location', '')}")
+                    if "message" in tool_output:
+                        st.info(tool_output["message"])
 
-if prompt := st.chat_input("Ask to book a flight, hotel, or type an unrelated question to test fallback..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+# User Chat Input
+if user_input := st.chat_input("I want to book a flight for London under 50,000 rupees..."):
+    # Append User Message
+    st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(user_input)
 
+    # Run Agent Logic & Handle Errors Gracefully
     with st.chat_message("assistant"):
-        with st.spinner("Agent is analyzing request..."):
+        with st.spinner("Processing request through agent workflow..."):
             try:
-                data = run_agent_logic(message=prompt, session_id="streamlit_user")
+                # Check for API key in Streamlit secrets or environment
+                if "GROQ_API_KEY" in st.secrets:
+                    os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
                 
-                intent = data.get("intent", {})
-                tool_output = data.get("tool_output", {})
+                response_data = run_agent_logic(user_input)
                 
-                reply = f"**Intent Detected:** `{intent.get('action_type')}`\n"
+                intent = response_data.get("intent", {})
+                tool_name = response_data.get("tool_executed", "")
+                tool_output = response_data.get("tool_output", {})
                 
-                service = tool_output.get("service")
-                results = tool_output.get("results", [])
+                response_content = tool_output.get("message", "Request processed successfully.")
+                st.markdown(response_content)
                 
-                if service == "flights" and results:
-                    reply += f"- **Destination:** {intent.get('destination')}\n"
-                    reply += f"- **Max Budget:** ${intent.get('max_budget')}\n\n**Flights Retrieved:**\n"
-                    for item in results:
-                        reply += f"- ✈️ {item['name']} - ${item['price']} to {item['location']}\n"
-                elif service == "hotels" and results:
-                    reply += f"- **Destination:** {intent.get('destination')}\n"
-                    reply += f"- **Max Budget:** ${intent.get('max_budget')}\n\n**Hotels Retrieved:**\n"
-                    for item in results:
-                        reply += f"- 🏨 {item['name']} ({item['rating']}) - ${item['price']}/night in {item['location']}\n"
-                else:
-                    reply += f"\n💡 {tool_output.get('message', 'How can I assist with your corporate travel?')}"
+                with st.expander("🔍 View Agent Execution Details"):
+                    st.markdown(f"**Intent Detected:** `{intent.get('action_type', 'unknown')}`")
+                    st.markdown(f"- **Destination:** {intent.get('destination', 'N/A')}")
+                    st.markdown(f"- **Max Budget:** {intent.get('max_budget', 'N/A')}")
+                    
+                    if tool_name and tool_name != "none":
+                        st.markdown(f"**Tool Executed:** `{tool_name}`")
+                        if "results" in tool_output:
+                            st.markdown("**Retrieved Options:**")
+                            for item in tool_output["results"]:
+                                st.markdown(f"- ✈️ {item.get('name', 'Option')} - {item.get('price', '')} to {item.get('location', '')}")
+                        if "message" in tool_output:
+                            st.info(tool_output["message"])
                 
-                st.markdown(reply)
-                st.session_state.messages.append({"role": "assistant", "content": reply})
+                # Save Assistant Response in History
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response_content,
+                    "data": response_data
+                })
                 
             except Exception as e:
-                st.error(f"Error processing request: {e}")
+                error_msg = f"Error processing request: {str(e)}"
+                st.error(error_msg)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": error_msg
+                })
