@@ -144,3 +144,59 @@ def run_agent_workflow(request: ChatRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Agent workflow execution error: {str(e)}")
+def run_agent_logic(message: str, session_id: str = "streamlit_user"):
+    if not os.getenv("GROQ_API_KEY"):
+        raise RuntimeError("GROQ_API_KEY is not configured.")
+    
+    try:
+        session_id = session_id or "default_session"
+        if session_id not in session_store:
+            session_store[session_id] = []
+        
+        session_store[session_id].append({"role": "user", "message": message})
+        
+        prompt = f"Extract the travel intent and parameters from the following user request: '{message}'. If it is unrelated to travel, booking, flights, or hotels, set action_type to 'general_inquiry'."
+        intent = structured_llm.invoke(prompt)
+        
+        raw_budget = intent.max_budget
+        try:
+            if raw_budget is not None and str(raw_budget).replace('.', '', 1).isdigit():
+                budget = float(raw_budget)
+            else:
+                budget = 1000.0
+        except Exception:
+            budget = 1000.0
+
+        destination = intent.destination if intent.destination else "Unknown"
+        
+        tool_name = "none"
+        tool_output = {}
+        
+        if intent.action_type == "book_travel":
+            tool_name = "search_flights_tool"
+            tool_output = search_flights_tool(destination, budget)
+        elif intent.action_type == "book_hotel":
+            tool_name = "search_hotels_tool"
+            tool_output = search_hotels_tool(destination, budget)
+        else:
+            tool_name = "fallback_response"
+            tool_output = {
+                "status": "info",
+                "service": "general",
+                "message": "I am your corporate travel concierge assistant. I can help you search for flights or hotels. Please specify your travel destination and budget!"
+            }
+            
+        session_store[session_id].append({
+            "role": "assistant", 
+            "intent": intent.dict(), 
+            "tool_executed": tool_name, 
+            "tool_output": tool_output
+        })
+        
+        return {
+            "intent": intent.dict(),
+            "tool_executed": tool_name,
+            "tool_output": tool_output
+        }
+    except Exception as e:
+        raise RuntimeError(f"Agent workflow execution error: {str(e)}")   
